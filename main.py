@@ -6,7 +6,11 @@ import string
 from email import policy
 from email.parser import BytesParser
 import re
-def get_content_type(file_path):
+import threading
+import time
+import json
+
+def get_content_type(file_path):    
     # """Xác định Content-Type cho một định dạng file cụ thể."""
     file_extension = os.path.splitext(file_path)[1].lower()
     # print(file_extension)
@@ -27,7 +31,7 @@ def generate_boundary():
 def get_file_size(file_path):
     return os.path.getsize(file_path)
 
-def send_mail(smtp_server, smtp_port, from_address, to_addresses, cc_addresses=None, bcc_addresses=None, subject='', body='', attachments=None):
+def send_mail(user_name, smtp_server, smtp_port, from_address, to_addresses, cc_addresses=None, bcc_addresses=None, subject='', body='', attachments=None):
     try:
         # Kết nối đến SMTP server
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -41,12 +45,12 @@ def send_mail(smtp_server, smtp_port, from_address, to_addresses, cc_addresses=N
         # print(recv1)
 
         # Gửi thông tin email
-        client_socket.send(f'MAIL FROM: <{from_address}>\r\n'.encode())
+        client_socket.send(f'MAIL FROM: {user_name} <{from_address}>\r\n'.encode())
         recv_mail_from = client_socket.recv(1024).decode()
         # print(recv_mail_from)
 
         # Gửi thông tin người nhận
-        recipients = to_addresses + (cc_addresses or []) + (bcc_addresses or [])
+        recipients = (to_addresses or []) + (cc_addresses or []) + (bcc_addresses or [])
         for recipient in recipients:
             client_socket.send(f'RCPT TO: <{recipient}>\r\n'.encode())
             recv_rcpt_to = client_socket.recv(1024).decode()
@@ -62,10 +66,13 @@ def send_mail(smtp_server, smtp_port, from_address, to_addresses, cc_addresses=N
 
         # Chuẩn bị và gửi nội dung email
         client_socket.send(f'Subject: {subject}\r\n'.encode())
-        client_socket.send(f'From: {from_address}\r\n'.encode())
-        client_socket.send(f'To: {", ".join(to_addresses)}\r\n'.encode())
+        client_socket.send(f'From: {user_name} <{from_address}>\r\n'.encode())
+        if to_addresses:
+            client_socket.send(f'To: {", ".join(to_addresses)}\r\n'.encode())
         if cc_addresses:
             client_socket.send(f'Cc: {", ".join(cc_addresses)}\r\n'.encode())
+        if bcc_addresses and not to_addresses:
+            client_socket.send(f'To: undisclosed-recipients\r\n'.encode())
         client_socket.send(f'Content-Type: multipart/mixed; boundary={boundary_string}\r\n'.encode())
         client_socket.send('\r\n'.encode())  # Kết thúc phần header, bắt đầu nội dung email
 
@@ -100,7 +107,7 @@ def send_mail(smtp_server, smtp_port, from_address, to_addresses, cc_addresses=N
         # Kết thúc nội dung email
         client_socket.send(f'--{boundary_string}--\r\n'.encode())
         client_socket.send('.\r\n'.encode())  # Dấu chấm kết thúc quá trình truyền dữ liệu thư
-        # recv_data = client_socket.recv(1024).decode()
+        recv_data = client_socket.recv(1024).decode()
         # print(recv_data)
 
     except Exception as e:
@@ -146,7 +153,7 @@ def read_msg_content(msg_content):
     except Exception as e:
         print(f"An error occurred: {e}")
 
-def get_mail(pop3_server, pop3_port, username, password, folder_path, config, filter):
+def get_mail(pop3_server, pop3_port, username, password, folder_path, config):
     try:
         # Kết nối đến máy chủ POP3
         client_socket = socket.create_connection((pop3_server, pop3_port))
@@ -182,9 +189,10 @@ def get_mail(pop3_server, pop3_port, username, password, folder_path, config, fi
             if len(temp) < 2 :
                 break
             name_msg = temp[1]
-            if not files_in_folder(name_msg, ".\\Mailbox") :
+            if not files_in_folder(name_msg, folder_path['Mailbox']) :
                 client_socket.send(f'RETR {temp[0]}\r\n'.encode())
                 email_content = b""
+                ok = False
                 while True:
                     recv_rtr = client_socket.recv(1024)
                     email_content += recv_rtr
@@ -196,31 +204,39 @@ def get_mail(pop3_server, pop3_port, username, password, folder_path, config, fi
                         # read file msg neu 
                         from_mail2, subject2, body2 = read_msg_content(email_content)
                         # print(from_mail2, subject2, body2)
-                        for x in filter["From"] :
+                        for x in config["Filter"]["From"] :
                             if from_mail2 == x :
-                                email_file_path = os.path.join(folder_path[config[x]], name_msg)
+                                email_file_path = os.path.join(folder_path[config["Filter"]["ToFolder"]], name_msg)
                                 with open(email_file_path, 'wb') as email_file:
                                     email_file.write(email_content)
+                                ok = True
                                 break
-                        for x in filter["Subject"] :
-                            if subject2.find(x[1: len(x) - 1]) != -1 :
-                                email_file_path = os.path.join(folder_path[config[x]], name_msg)
+                        for x in config["Filter"]["Subject"] :
+                            if subject2.find(x) != -1 :
+                                email_file_path = os.path.join(folder_path[config["Filter"]["SubjectFolder"]], name_msg)
                                 with open(email_file_path, 'wb') as email_file:
                                     email_file.write(email_content)
+                                ok = True
                                 break
-                        for x in filter["Content"] :
-                            if body2.find(x[1: len(x) - 1]) != -1 :
-                                email_file_path = os.path.join(folder_path[config[x]], name_msg)
+                        for x in config["Filter"]["Content"] :
+                            if body2.find(x) != -1 :
+                                email_file_path = os.path.join(folder_path[config["Filter"]["ContentFolder"]], name_msg)
                                 with open(email_file_path, 'wb') as email_file:
                                     email_file.write(email_content)
+                                ok = True
                                 break
-                        for x in filter["Spam"] :
-                            if body2.find(x[1: len(x) - 1]) != -1 or subject2.find(x[1: len(x) - 1]) != -1 :
-                                email_file_path = os.path.join(folder_path[config[x]], name_msg)
+                        for x in config["Filter"]["Spam"] :
+                            if body2.find(x) != -1 or subject2.find(x) != -1 :
+                                email_file_path = os.path.join(folder_path[config["Filter"]["SpamFolder"]], name_msg)
                                 with open(email_file_path, 'wb') as email_file:
                                     email_file.write(email_content)
+                                ok = True
                                 break
-                        email_file_path = os.path.join(".\\Mailbox", name_msg)
+                        if not ok :
+                            email_file_path = os.path.join(folder_path["Inbox"], name_msg)
+                            with open(email_file_path, 'wb') as email_file:
+                                    email_file.write(email_content)
+                        email_file_path = os.path.join(folder_path['Mailbox'], name_msg)
                         with open(email_file_path, 'wb') as email_file:
                                     email_file.write(email_content)
                         break
@@ -237,7 +253,7 @@ def get_mail(pop3_server, pop3_port, username, password, folder_path, config, fi
 
 
 
-def read_msg_file(msg_file_path):
+def read_msg_file(msg_file_path, folder_path):
     try:
         # Đọc nội dung của file .msg
         with open(msg_file_path, 'rb') as file:
@@ -251,9 +267,8 @@ def read_msg_file(msg_file_path):
         print(f"Subject: {msg['Subject']}")
         print(f"From: {msg['From']}")
         print(f"To: {msg['To']}")
-        print(f"Cc: {msg['Cc']}")
-        print(f"Bcc: {msg['Bcc']}")
-
+        if msg['Cc'] :
+            print(f"Cc: {msg['Cc']}")
         # In nội dung email
         print("\nBody:")
         body2 = str(msg.get_body().get_content())
@@ -292,12 +307,17 @@ def read_msg_file(msg_file_path):
                 else :
                     break
         file_name = os.path.basename(msg_file_path)
-        file_path = os.path.join(".\\Seen", file_name)
+        file_path = os.path.join(folder_path['Seen'], file_name)
         with open(file_path, 'wb') as file :
             file.write("da xem".encode())
         return from_mail2, subject2, body2
     except Exception as e:
         print(f"An error occurred: {e}")
+
+def autoSave(sleep_time: int,pop3_server, pop3_port, username, password, folder_path, config) :
+    while True:
+        get_mail(pop3_server, pop3_port, username, password, folder_path, config)
+        time.sleep(sleep_time) 
 
 def menu() :
     print("""Vui lòng chọn Menu:
@@ -315,67 +335,50 @@ def mailbox() :
 
 if __name__ == '__main__' :
     # doc config
-    config = {}
-    with open(".\\config.txt", 'r') as file :
-        line = file.readline() # doc General:
-        line = file.readline()
-        while line:
-            # loại bỏ những khoảng trắng 
-            line = line.strip()
+    f = open("config.json")
+    config = json.load(f)
 
-            if line[0] == '#' or not line :
-                line = file.readline()
-                continue
-            if line == 'Filter:' :
-                break
-            key, value = line.split(": ")
-            config[key] = value
-            line = file.readline()
-        filter = {}
-        line = file.readline()
-        while line :
-            # loại bỏ những khoảng trắng 
-            line = line.strip()
-
-            if line[0] == '#' or not line :
-                line = file.readline()
-                continue
-
-            first , value = line.split(" - To folder: ")
-
-            buffer, Keys = first.split(": ")
-
-            keys = Keys.split(", ")
-            filter[buffer] = keys
-            for x in keys :
-                config[x] = value
-            line = file.readline()
     # print(config)
-    ls = config['Username'].split(" ")
-    username = ls[len(ls) - 1][1:len(ls[len(ls) - 1]) - 1]
-    from_mail = ls[len(ls) - 1]
+
     folder_path = {}
+    user_name, from_mail = config["General"]["Username"]
+    from_mail = from_mail[1 : len(from_mail) - 1]
     temp = {}
     temp['1'] = 'Inbox'
     temp['2'] = 'Project'
     temp['3'] = 'Important'
     temp['4'] = 'Work'
     temp['5'] = 'Spam'
-
-    folder_path['Important'] = ".\\Important"
-    folder_path['Project'] = ".\\Project"
-    folder_path['Work'] = "\\Work"
-    folder_path['Spam'] = ".\\Spam"
-    folder_path['Inbox'] = ".\\Inbox"
+    if not os.path.exists(f".\\{from_mail}"):
+        os.mkdir(f".\\{from_mail}")
+    folder_path['Important'] = f".\\{from_mail}\\Important"
+    folder_path['Project'] = f".\\{from_mail}\\Project"
+    folder_path['Work'] = f".\\{from_mail}\\Work"
+    folder_path['Spam'] = f".\\{from_mail}\\Spam"
+    folder_path['Inbox'] = f".\\{from_mail}\\Inbox"
+    folder_path['Mailbox'] = f".\\{from_mail}\\Mailbox"
+    folder_path['Seen'] = f".\\{from_mail}\\Seen"
+    for key in folder_path :
+        if not os.path.exists(folder_path[key]):
+            os.mkdir(folder_path[key])
     # # print(from_mail)
+    thread = threading.Thread(target=autoSave, args=(config["General"]["Autoload"], config["General"]['MailServer'], config["General"]['POP3'], from_mail, config["General"]['Password'], folder_path, config), daemon=True)
+    thread.start()
     while True :
         menu()
         choice = input("Bạn chọn: ")
         if choice == '1' :
             print("Đây là thông tin soạn email: (nếu không điền vui lòng nhấn enter để bỏ qua)")
             to_email = input("To: ").split(", ")
+            if to_email[0] == '' :
+                to_email = None
             cc_email = input("CC: ").split(", ")
+            if cc_email[0] == '' :
+                cc_email = None
             bcc_email = input("BCC: ").split(", ")
+            if bcc_email[0] == '' :
+                bcc_email = None
+
             subject = input("Subject: ")
             content = input("Content: ")
             attachment_file = int(input("Có gửi kèm file (1. có, 2. không): "))
@@ -385,16 +388,12 @@ if __name__ == '__main__' :
                 for i in range (number_of_file) :
                     attachment_path = input(f"Cho biết đường dẫn file thứ {i + 1}:")
                     attachment_paths.append(attachment_path[1:len(attachment_path) - 1])
-                send_mail(config['MailServer'], int(config['SMTP']), from_mail[1:len(from_mail) - 1], to_email, cc_email, bcc_email
-                        , subject, content, attachment_paths)
+                send_mail(user_name, config["General"]['MailServer'], config["General"]['SMTP'], from_mail, to_email, cc_email, bcc_email, subject, content, attachment_paths)
             else :
-                send_mail(config['MailServer'], int(config['SMTP']), from_mail[1:len(from_mail) - 1], to_email, cc_email, bcc_email
-                        , subject, content, attachments=None)
+                send_mail(user_name, config["General"]['MailServer'], config["General"]['SMTP'], from_mail, to_email, cc_email, bcc_email, subject, content, attachments=None)
             print("Đã gửi email thành công")
         elif choice == '2' :
             mailbox()
-            # luc nay get mail 
-            get_mail(config['MailServer'], int(config['POP3']), username, config['Password'], folder_path, config, filter) 
             while True :
                 folder = input("Bạn muốn xem folder nào: ")
                 if folder == '0' :
@@ -423,9 +422,10 @@ if __name__ == '__main__' :
                     if number_file > sum_files or number_file <= 0 :
                         break 
                     print(f"Nội dung email thứ {number_file}: ")
-                    read_msg_file(file_path[number_file])
+                    read_msg_file(file_path[number_file], folder_path)
 
 
         else :
             break 
     
+
