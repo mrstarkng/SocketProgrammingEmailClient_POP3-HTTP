@@ -1,1 +1,1 @@
-# SimpleMailClient - 	CSC10008
+#CSC10008 - SimpleMailClient 
