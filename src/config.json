@@ -1,0 +1,20 @@
+{
+    "General": {
+        "Username": ["Trinh Cao An", "<anjuly26th@gmail.com>"],
+        "Password": "Caoan2004@",
+        "MailServer": "127.0.0.1",
+        "SMTP": 2225,
+        "POP3": 3335,
+        "Autoload": 10
+    },
+    "Filter": {
+        "From": ["ahihi@testing.com", "ahuu@testing.com"],
+        "ToFolder": "Project",
+        "Subject": ["urgent", "ASAP"],
+        "SubjectFolder": "Important",
+        "Content": ["report", "meeting"],
+        "ContentFolder": "Work",
+        "Spam": ["virus", "hack", "crack"],
+        "SpamFolder": "Spam"
+    }
+}
